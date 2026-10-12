@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# verify — prove the isolation properties and the Java/Kotlin toolchain from INSIDE the sandbox,
+# running as the same user the agent runs as. Prints PASS/FAIL/INFO lines; exit 1 on any FAIL.
+set -uo pipefail
+# shellcheck source=/dev/null
+. /opt/agent-sandbox/agent-env.sh
+
+G=$'\033[32m'; Rd=$'\033[31m'; Y=$'\033[33m'; B=$'\033[1m'; R=$'\033[0m'
+fails=0
+pass() { printf '  %sPASS%s  %s\n' "$G" "$R" "$*"; }
+fail() { printf '  %sFAIL%s  %s\n' "$Rd" "$R" "$*"; fails=$((fails + 1)); }
+info() { printf '  %sINFO%s  %s\n' "$Y" "$R" "$*"; }
+section() { printf '\n%s%s%s\n' "$B" "$*" "$R"; }
+
+MODE=unknown; DNS_POLICY=unknown
+if [ -r /run/agent-sandbox/network.ok ]; then
+  MODE="$(sed -n 's/^MODE=//p' /run/agent-sandbox/network.ok)"
+  DNS_POLICY="$(sed -n 's/^AGENT_DNS=//p' /run/agent-sandbox/network.ok)"
+fi
+
+# reach URL [proxy|direct] -> 0 if a TCP/TLS connection + HTTP response happened
+reach() {
+  if [ "${2:-proxy}" = direct ]; then
+    curl -s -o /dev/null --noproxy '*' -m 6 "$1"
+  else
+    curl -s -o /dev/null -m 15 "$1"
+  fi
+}
+
+tcp_open() { timeout 4 bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null; }
+
+# Plain-HTTP request through the proxy: blocked if curl fails or squid answers with its error page.
+proxy_http_blocked() {
+  local headers
+  headers="$(curl -s -m 6 -D - -o /dev/null "$1" 2>/dev/null)" || return 0
+  printf '%s' "$headers" | grep -qi '^x-squid-error'
+}
+
+section "Identity and privileges"
+[ "$(id -un)" = agent ] && pass "running as unprivileged user 'agent' (uid $(id -u))" || fail "running as $(id -un), expected agent"
+if sudo -n true 2>/dev/null; then fail "sudo works for the agent"; else pass "no sudo"; fi
+if id -nG | tr ' ' '\n' | grep -qxE 'sudo|admin|docker|lxd|adm'; then fail "member of a privileged group: $(id -nG)"; else pass "no privileged groups ($(id -nG))"; fi
+if [ -r /etc/agent-sandbox/sandbox.env ]; then fail "can read root-only /etc/agent-sandbox/sandbox.env"; else pass "root-only sandbox settings are unreadable"; fi
+
+section "No access to the host machine"
+mounts="$(findmnt -rn -t virtiofs,9p,fuse.sshfs,nfs,nfs4,cifs,vboxsf -o TARGET 2>/dev/null || true)"
+[ -z "$mounts" ] && pass "no host/shared filesystem mounts" || fail "shared mounts present: $mounts"
+if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ]; then fail "an SSH agent is forwarded into the VM"; else pass "no SSH agent forwarding"; fi
+if [ -e /dev/vsock ] && [ -r /dev/vsock ] && [ -w /dev/vsock ]; then info "/dev/vsock exists (no host service listens on it in Lima plain mode)"; fi
+gw="$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}')"
+host_candidates="$gw 192.168.5.2"   # 192.168.5.2 = Lima's alias for the host
+for h in $host_candidates; do
+  [ -n "$h" ] || continue
+  for p in 22 80 443 8080; do
+    if tcp_open "$h" "$p"; then fail "host/gateway $h:$p reachable directly"; else pass "host/gateway $h:$p not reachable directly"; fi
+  done
+  if proxy_http_blocked "http://$h/"; then pass "host/gateway $h not reachable via proxy"; else fail "host/gateway $h reachable via proxy"; fi
+done
+if tcp_open 169.254.169.254 80; then fail "link-local metadata address reachable"; else pass "169.254.169.254 (metadata) not reachable"; fi
+
+section "Egress policy (mode: $MODE, agent DNS: $DNS_POLICY)"
+[ "$MODE" != unknown ] && pass "egress policy active" || fail "egress policy NOT active (/run/agent-sandbox/network.ok missing)"
+if [ "$MODE" = allowlist ]; then
+  if reach https://example.com direct; then fail "direct internet access (bypassing proxy) works"; else pass "direct internet access is blocked (proxy is the only way out)"; fi
+  if reach https://example.com; then fail "non-allowlisted domain example.com reachable via proxy"; else pass "non-allowlisted domain example.com blocked by proxy"; fi
+  if tcp_open 1.1.1.1 443; then fail "raw TCP to 1.1.1.1:443 works"; else pass "raw TCP to an IP address is blocked"; fi
+elif [ "$MODE" = open ]; then
+  info "open mode: public internet allowed; private ranges still blocked"
+fi
+if [ "$DNS_POLICY" = block ]; then
+  if timeout 6 python3 -c 'import socket; socket.getaddrinfo("example.com", 443)' 2>/dev/null; then
+    fail "agent can resolve DNS names directly (DNS exfiltration channel)"
+  else
+    pass "agent cannot resolve DNS directly (the proxy resolves names)"
+  fi
+fi
+if reach https://repo.maven.apache.org/maven2/; then pass "Maven Central reachable via proxy"; else fail "Maven Central NOT reachable via proxy"; fi
+if reach https://plugins.gradle.org/m2/; then pass "Gradle Plugin Portal reachable via proxy"; else fail "Gradle Plugin Portal NOT reachable via proxy"; fi
+if reach "https://api.githubcopilot.com/"; then pass "Copilot API reachable via proxy"; else fail "Copilot API (api.githubcopilot.com) NOT reachable"; fi
+if reach "https://$GH_HOST/"; then pass "$GH_HOST reachable via proxy"; else fail "$GH_HOST NOT reachable via proxy"; fi
+if [ "$GIT_HOST" != "github.com" ]; then
+banner="$(timeout 10 /opt/agent-sandbox/bin/proxy-connect "$GIT_HOST" 22 </dev/null 2>/dev/null | head -c 4 || true)"
+[ "$banner" = "SSH-" ] && pass "SSH to $GIT_HOST:22 works through the proxy" || fail "SSH to $GIT_HOST:22 through the proxy failed"
+fi
+other_git=gitlab.com; [ "$GIT_HOST" = gitlab.com ] && other_git=github.com
+banner="$(timeout 10 /opt/agent-sandbox/bin/proxy-connect "$other_git" 22 </dev/null 2>/dev/null | head -c 4 || true)"
+[ "$banner" = "SSH-" ] && fail "SSH to another host ($other_git:22) is possible" || pass "SSH to other hosts is blocked"
+
+section "Toolchain"
+v() { local out; if out="$("$@" 2>&1 | head -1)"; then pass "$out"; else fail "$* failed: $out"; fi; }
+v java -version
+v javac -version
+gradle_out="$(gradle --version 2>&1 | grep -m1 '^Gradle ')" && pass "$gradle_out" || fail "gradle --version failed"
+mvn_out="$(mvn -v 2>&1 | head -1)" && pass "$mvn_out" || fail "mvn -v failed"
+v node --version
+v git --version
+v gh --version
+v copilot --version
+info "JAVA_HOME=${JAVA_HOME:-unset}"
+info "JDKs for Gradle toolchains: $(ls -d /usr/lib/jvm/temurin-* 2>/dev/null | xargs -n1 basename | paste -sd' ' -)"
+
+section "Result"
+if [ "$fails" -eq 0 ]; then
+  printf '  %sAll checks passed.%s\n' "$G" "$R"
+else
+  printf '  %s%d check(s) failed.%s See docs/09-troubleshooting.md\n' "$Rd" "$fails" "$R"
+  exit 1
+fi

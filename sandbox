@@ -1,0 +1,491 @@
+#!/usr/bin/env bash
+# agent-sandbox — run AI coding agents (GitHub Copilot CLI, ...) inside a disposable,
+# hardware-isolated VM with an egress allowlist. See README.md.
+set -euo pipefail
+
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  d="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  case "$src" in /*) ;; *) src="$d/$src" ;; esac
+done
+ROOT_DIR="$(cd -P "$(dirname "$src")" && pwd)"
+# shellcheck source=lib/common.sh
+. "$ROOT_DIR/lib/common.sh"
+# shellcheck source=lib/vm.sh
+. "$ROOT_DIR/lib/vm.sh"
+
+usage() {
+  cat <<EOF
+${C_BLD}agent-sandbox${C_RST} — isolated VMs for AI coding agents
+
+${C_BLD}One-time${C_RST}
+  sandbox setup                       Install/verify host prerequisites (Lima)
+
+${C_BLD}Lifecycle${C_RST}
+  sandbox create NAME SSH_URL [options]
+                                      Create + provision a sandbox VM for ONE repository, e.g.
+                                      git@github.com:org/repo.git or ssh://git@host/org/repo.git
+      --network allowlist|open        Egress policy (default: allowlist)
+      --lists "core java ..."         Allowlist presets from config/allowlist/
+      --allow "dom1 dom2"             Extra allowed domains
+      --cpus N --memory GiB --disk GiB
+  sandbox list                        List sandboxes
+  sandbox status NAME                 Show state + settings
+  sandbox start|stop NAME
+  sandbox provision NAME              Re-run guest provisioning (after changing guest/ or config/)
+  sandbox destroy NAME [-y]           Delete the VM and all its data
+
+${C_BLD}Working${C_RST}
+  sandbox auth NAME [git|gh|copilot|status]   Set up credentials INSIDE the VM (default: all);
+                                      the git step clones the repository once the deploy key works
+  sandbox clone NAME                  Clone (or fetch) the sandbox's repository into ~/work
+  sandbox agent NAME [--prompt TEXT | --prompt-file F]
+                                      Start/attach the agent in a persistent tmux session
+  sandbox shell NAME [--admin]        Shell as 'agent' (or root with --admin)
+  sandbox exec NAME -- CMD...         Run a command as 'agent'
+  sandbox put NAME PATH...            Copy files from the host into ~/inbox in the VM
+
+${C_BLD}Review${C_RST}
+  sandbox fetch NAME [--to PATH]      Pull the VM's branches into a host review repo
+  sandbox ide NAME                    SSH config for JetBrains Gateway / Remote Development
+
+${C_BLD}Network${C_RST}
+  sandbox allow NAME DOMAIN...        Allow more domains (applied live)
+  sandbox network NAME allowlist|open|reload [--dns block|allow]
+  sandbox blocked NAME [-f]           Show what the egress policy blocked
+
+${C_BLD}Checks${C_RST}
+  sandbox verify NAME                 Prove isolation + toolchain work (PASS/FAIL report)
+EOF
+}
+
+# --------------------------------------------------------------------------- helpers
+
+require_running_or_start() {
+  ensure_running
+  [ "$(vm_status)" = running ] || die "Sandbox '$NAME' is not running (status: $(vm_status))."
+}
+
+agent_bin() {
+  # agent_bin [-t] SCRIPT [ARGS...] — run one of the guest helper scripts as 'agent'
+  local tflag=""
+  if [ "${1:-}" = "-t" ]; then tflag="-t"; shift; fi
+  local script="$1"; shift
+  if [ -n "$tflag" ]; then
+    agent_ssh -t "/opt/agent-sandbox/bin/$script $(quote_args "$@")"
+  else
+    agent_ssh "/opt/agent-sandbox/bin/$script $(quote_args "$@")"
+  fi
+}
+
+default_repo_dir() {
+  repo_dir_from_url "$REPO_URL"
+}
+
+validate_domain() {
+  case "$1" in
+    ""|*[!A-Za-z0-9.*-]*|*..*) die "Invalid domain '$1'" ;;
+  esac
+}
+
+# --------------------------------------------------------------------------- commands
+
+cmd_setup() {
+  [ $# -eq 0 ] || die "Usage: sandbox setup"
+  load_config
+  mkdir -p "$SANDBOXES_DIR"
+  chmod 700 "$SANDBOX_HOME"
+  log "State directory: $SANDBOX_HOME"
+  vm_setup
+  if [ ! -f "$ROOT_DIR/config/sandbox.conf" ]; then
+    echo
+    warn "No config/sandbox.conf yet. Optional: cp config/sandbox.conf.example config/sandbox.conf  (git host, GHES, JDKs, ...)"
+  fi
+}
+
+cmd_create() {
+  load_config
+  NAME="${1:-}"; validate_name "$NAME"; shift
+  local lists_override="" allow_extra=""
+  REPO_URL=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --network) NETWORK_MODE="$2"; shift 2 ;;
+      --lists)   lists_override="$2"; shift 2 ;;
+      --allow)   allow_extra="$2"; shift 2 ;;
+      --cpus)    CPUS="$2"; shift 2 ;;
+      --memory)  MEMORY_GIB="$2"; shift 2 ;;
+      --disk)    DISK_GIB="$2"; shift 2 ;;
+      -*) die "Unknown option '$1'" ;;
+      *)
+        [ -z "$REPO_URL" ] || die "Only one repository per sandbox (got '$REPO_URL' and '$1')"
+        REPO_URL="$1"; shift ;;
+    esac
+  done
+  [ -n "$REPO_URL" ] || die "Usage: sandbox create NAME SSH_URL [options]   e.g. sandbox create acme git@github.com:my-org/acme.git"
+  validate_ssh_repo_url "$REPO_URL"
+  [ -n "$lists_override" ] && ALLOWLISTS="$lists_override"
+  [ -n "$allow_extra" ] && EXTRA_ALLOW_DOMAINS="${EXTRA_ALLOW_DOMAINS:-} $allow_extra"
+  case "$NETWORK_MODE" in allowlist|open) ;; *) die "--network must be 'allowlist' or 'open'" ;; esac
+  case "$CPUS$MEMORY_GIB$DISK_GIB" in *[!0-9]*) die "--cpus/--memory/--disk must be integers" ;; esac
+
+  SBX_DIR="$SANDBOXES_DIR/$NAME"
+  [ ! -e "$SBX_DIR" ] || die "Sandbox '$NAME' already exists ($SBX_DIR). Use 'sandbox destroy $NAME' first."
+
+  GIT_HOST="$(git_host_from_url "$REPO_URL")"
+  if [ -z "${GIT_USER_NAME:-}" ]; then
+    GIT_USER_NAME="$(git config --global user.name 2>/dev/null || true)"
+    GIT_USER_NAME="${GIT_USER_NAME:-Coding Agent}"
+  fi
+  if [ -z "${GIT_USER_EMAIL:-}" ]; then
+    GIT_USER_EMAIL="$(git config --global user.email 2>/dev/null || true)"
+    GIT_USER_EMAIL="${GIT_USER_EMAIL:-agent@sandbox.invalid}"
+  fi
+  for v in LIMA_INSTANCE LIMA_SSH_PORT; do eval "$v=\${$v:-}"; done
+
+  mkdir -p "$SBX_DIR"
+  chmod 700 "$SANDBOX_HOME" "$SANDBOXES_DIR" "$SBX_DIR" 2>/dev/null || true
+  # Key used ONLY by the host to SSH into this VM. It never enters the VM (only its .pub does).
+  ssh-keygen -q -t ed25519 -N "" -C "agent-sandbox-host-access-$NAME" -f "$SBX_DIR/id_ed25519"
+  build_allowlist > "$SBX_DIR/allowlist.txt"
+  save_sandbox_env
+
+  trap 'echo; warn "Creation of sandbox '\''$NAME'\'' did not finish. Fix the problem, then run: sandbox provision $NAME   (or start over: sandbox destroy $NAME -y)"' EXIT
+  log "Creating sandbox '$NAME' (network: $NETWORK_MODE, lists: $ALLOWLISTS)"
+  vm_create
+  save_sandbox_env
+  provision_guest
+  trap - EXIT
+
+  echo
+  ok "Sandbox '$NAME' is ready."
+  cat <<EOF
+
+Next steps:
+  sandbox verify $NAME                     # prove isolation + toolchain (recommended once)
+  sandbox auth $NAME                       # deploy key -> clone $REPO_URL, gh login, Copilot login
+  sandbox agent $NAME --prompt "..."       # start the agent in ~/work/$(repo_dir_from_url "$REPO_URL")
+EOF
+}
+
+cmd_provision() {
+  load_sandbox "${1:-}"
+  require_running_or_start
+  provision_guest
+  ok "Provisioned '$NAME'"
+}
+
+cmd_start() {
+  load_sandbox "${1:-}"
+  require_running_or_start
+  ok "Sandbox '$NAME' is running"
+}
+
+cmd_stop() {
+  load_sandbox "${1:-}"
+  vm_stop
+  ok "Sandbox '$NAME' stopped"
+}
+
+cmd_destroy() {
+  local name="${1:-}" yes="${2:-}"
+  load_sandbox "$name"
+  if [ "$yes" != "-y" ]; then
+    printf 'This deletes the VM and everything inside it (unpushed work is lost).\nType the sandbox name to confirm: ' >&2
+    local answer; read -r answer
+    [ "$answer" = "$NAME" ] || die "Aborted"
+  fi
+  vm_destroy
+  rm -rf "$SBX_DIR"
+  [ -f "$SANDBOX_HOME/ssh_config" ] && write_ide_config >/dev/null
+  ok "Sandbox '$NAME' destroyed"
+}
+
+cmd_list() {
+  local d n
+  printf '%-20s %-10s %-10s %s\n' NAME STATUS NETWORK REPO
+  for d in "$SANDBOXES_DIR"/*/; do
+    [ -f "$d/sandbox.env" ] || continue
+    n="$(basename "$d")"
+    (
+      load_sandbox "$n"
+      printf '%-20s %-10s %-10s %s\n' "$NAME" "$(vm_status 2>/dev/null || echo '?')" "$NETWORK_MODE" "${REPO_URL:--}"
+    ) || true
+  done
+}
+
+cmd_status() {
+  load_sandbox "${1:-}"
+  cat <<EOF
+Name:        $NAME
+VM:          Lima instance $LIMA_INSTANCE
+Status:      $(vm_status)
+Resources:   ${CPUS} CPU, ${MEMORY_GIB} GiB RAM, ${DISK_GIB} GiB disk
+Network:     $NETWORK_MODE (agent DNS: $AGENT_DNS, lists: $ALLOWLISTS)
+Git:         ssh to $GIT_HOST   gh host: $GH_HOST   Copilot host: $COPILOT_HOST
+Repository:  $REPO_URL  (VM: ~/work/$(default_repo_dir))
+SSH:         $(vm_ssh_endpoint) (user 'agent')
+State dir:   $SBX_DIR
+EOF
+}
+
+cmd_shell() {
+  load_sandbox "${1:-}"; shift || true
+  require_running_or_start
+  if [ "${1:-}" = "--admin" ]; then
+    warn "Root shell. Anything you run here is NOT restricted by the egress policy."
+    vm_admin_shell
+  else
+    agent_ssh -t
+  fi
+}
+
+cmd_exec() {
+  load_sandbox "${1:-}"; shift || true
+  [ "${1:-}" = "--" ] && shift
+  [ $# -gt 0 ] || die "Usage: sandbox exec NAME -- CMD..."
+  require_running_or_start
+  agent_ssh -t ". /opt/agent-sandbox/agent-env.sh && $(quote_args "$@")"
+}
+
+cmd_put() {
+  load_sandbox "${1:-}"; shift || true
+  [ $# -gt 0 ] || die "Usage: sandbox put NAME PATH..."
+  require_running_or_start
+  local p
+  for p in "$@"; do [ -e "$p" ] || die "No such file: $p"; done
+  warn "Copying into the VM (~/inbox): $*  — make sure these contain no secrets."
+  COPYFILE_DISABLE=1 tar -cf - "$@" | agent_ssh 'mkdir -p ~/inbox && tar --no-same-owner -xf - -C ~/inbox'
+  ok "Copied to /home/agent/inbox"
+}
+
+cmd_agent() {
+  load_sandbox "${1:-}"; shift || true
+  local prompt="" prompt_file=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --prompt) prompt="$2"; shift 2 ;;
+      --prompt-file) prompt_file="$2"; shift 2 ;;
+      *) die "Unknown option '$1'" ;;
+    esac
+  done
+  require_running_or_start
+  if [ -n "$prompt_file" ]; then
+    [ -f "$prompt_file" ] || die "No such file: $prompt_file"
+    prompt="$(cat "$prompt_file")"
+  fi
+  if [ -n "$prompt" ]; then
+    printf '%s' "$prompt" | agent_ssh 'umask 077; mkdir -p ~/.agent-sandbox && cat > ~/.agent-sandbox/next-prompt'
+  fi
+  agent_bin -t agent-session
+}
+
+cmd_auth() {
+  load_sandbox "${1:-}"; shift || true
+  require_running_or_start
+  agent_bin -t agent-auth "${1:-all}"
+}
+
+cmd_clone() {
+  load_sandbox "${1:-}"
+  [ $# -le 1 ] || die "Usage: sandbox clone NAME   (one repository per sandbox: $REPO_URL)"
+  require_running_or_start
+  agent_bin -t agent-auth clone
+}
+
+cmd_verify() {
+  load_sandbox "${1:-}"
+  require_running_or_start
+  agent_bin -t verify
+}
+
+cmd_fetch() {
+  load_sandbox "${1:-}"; shift || true
+  local dir to=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to) to="$2"; shift 2 ;;
+      *) die "Unknown option '$1'" ;;
+    esac
+  done
+  dir="$(default_repo_dir)"
+  case "$dir" in ""|*/*|.*) die "Cannot derive a repository directory from '$REPO_URL'" ;; esac
+  [ -n "$to" ] || to="$HOME/agent-review/$NAME/$dir"
+  require_running_or_start
+  need_cmd git
+
+  mkdir -p "$SBX_DIR/review"
+  local bundle="$SBX_DIR/review/$dir.bundle"
+  log "Creating git bundle of ~/work/$dir inside the VM"
+  agent_ssh "set -e; cd ~/work/$(quote_args "$dir"); f=\$(mktemp); git bundle create \"\$f\" --branches --tags >/dev/null 2>&1; cat \"\$f\"; rm -f \"\$f\"" > "$bundle"
+  [ -s "$bundle" ] || die "Empty bundle — is ~/work/$dir cloned (sandbox clone $NAME) and does it have commits?"
+
+  if [ ! -d "$to/.git" ]; then
+    log "Creating review repository $to"
+    mkdir -p "$to"
+    git -C "$to" init -q
+    git -C "$to" remote add origin "$REPO_URL"
+  fi
+  git -C "$to" remote get-url sandbox >/dev/null 2>&1 || git -C "$to" remote add sandbox "$bundle"
+  git -C "$to" remote set-url sandbox "$bundle"
+  # Fetching objects runs no code from the repository (no hooks, no filters defined by it).
+  git -C "$to" fetch --prune --no-tags sandbox '+refs/heads/*:refs/remotes/sandbox/*'
+  echo
+  ok "Agent branches are now available in $to as sandbox/<branch>:"
+  git -C "$to" --no-pager branch -r --list 'sandbox/*' --format='   %(refname:short)  %(committerdate:relative)  %(subject)'
+  cat <<EOF
+
+Review (nothing from the agent is executed):
+  git -C "$to" log --oneline --graph sandbox/<branch>
+  git -C "$to" diff <base>...sandbox/<branch>
+IntelliJ: open "$to" and choose "Preview in Safe Mode" when asked to trust the project,
+then use Git > Branches > sandbox/<branch> > Compare with ... (see docs/07-reviewing-in-intellij.md).
+EOF
+}
+
+write_ide_config() {
+  local f="$SANDBOX_HOME/ssh_config" d n
+  {
+    echo "# Generated by agent-sandbox ($ROOT_DIR). Regenerate with: sandbox ide <name>"
+    for d in "$SANDBOXES_DIR"/*/; do
+      [ -f "$d/sandbox.env" ] || continue
+      n="$(basename "$d")"
+      (
+        load_sandbox "$n"
+        endpoint="$(vm_ssh_endpoint)"
+        cat <<EOF
+
+Host sandbox-$NAME
+  HostName ${endpoint% *}
+  Port ${endpoint#* }
+  User agent
+  IdentityFile $SBX_DIR/id_ed25519
+  IdentitiesOnly yes
+  IdentityAgent none
+  UserKnownHostsFile $SBX_DIR/known_hosts
+  HostKeyAlias agent-sandbox-$NAME
+  StrictHostKeyChecking accept-new
+  ForwardAgent no
+  ForwardX11 no
+  ServerAliveInterval 30
+EOF
+      ) || true
+    done
+  } > "$f"
+  chmod 600 "$f"
+  echo "$f"
+}
+
+cmd_ide() {
+  load_sandbox "${1:-}"
+  require_running_or_start
+  agent_ssh true  # records the VM host key in known_hosts
+  local f; f="$(write_ide_config)"
+  local dir; dir="$(default_repo_dir)"
+  ok "Wrote $f"
+  cat <<EOF
+
+1. Add this as the FIRST line of ~/.ssh/config (must be above any 'Host' blocks):
+
+     Include $f
+
+   Test it:   ssh sandbox-$NAME 'whoami; hostname'
+
+2. JetBrains Gateway (or IntelliJ > File > Remote Development > SSH):
+     Connection:    Host 'sandbox-$NAME' ($(vm_ssh_endpoint | tr ' ' ':')), user 'agent',
+                    "OpenSSH config and authentication agent" / key $SBX_DIR/id_ed25519
+     Project path:  /home/agent/work/$dir
+   The IDE backend runs INSIDE the VM, so Gradle/Maven sync never executes on your host.
+   Its download needs the 'jetbrains' allowlist:  sandbox allow $NAME \$(cat $ROOT_DIR/config/allowlist/jetbrains.txt | grep -v '^#')
+   (or choose "Upload installer from this computer" in Gateway).
+
+Alternative without remote IDE:  sandbox fetch $NAME   (pull branches into a local review repo)
+See docs/07-reviewing-in-intellij.md for the trade-offs.
+EOF
+}
+
+cmd_allow() {
+  load_sandbox "${1:-}"; shift || true
+  [ $# -gt 0 ] || die "Usage: sandbox allow NAME DOMAIN..."
+  local d
+  for d in "$@"; do
+    case "$d" in \#*) continue ;; esac
+    validate_domain "$d"
+    if grep -qxF "$d" "$SBX_DIR/allowlist.txt"; then
+      log "$d already allowed"
+    else
+      printf '%s\n' "$d" >> "$SBX_DIR/allowlist.txt"
+      ok "Allowed $d"
+    fi
+  done
+  if [ "$(vm_status)" = running ]; then push_network; else log "Applied on next start (sandbox start $NAME)"; fi
+}
+
+cmd_network() {
+  load_sandbox "${1:-}"; shift || true
+  local mode="${1:-}"; shift || true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dns) AGENT_DNS="$2"; shift 2 ;;
+      *) die "Unknown option '$1'" ;;
+    esac
+  done
+  case "$AGENT_DNS" in block|allow) ;; *) die "--dns must be block or allow" ;; esac
+  case "$mode" in
+    allowlist|open) NETWORK_MODE="$mode" ;;
+    reload) ;;
+    *) die "Usage: sandbox network NAME allowlist|open|reload [--dns block|allow]" ;;
+  esac
+  [ "$NETWORK_MODE" = open ] && warn "Open mode: the agent can reach any public internet host (private/host networks stay blocked)."
+  save_sandbox_env
+  require_running_or_start
+  push_network
+  ok "Network policy for '$NAME': $NETWORK_MODE (agent DNS: $AGENT_DNS)"
+}
+
+cmd_blocked() {
+  load_sandbox "${1:-}"
+  require_running_or_start
+  if [ "${2:-}" = "-f" ]; then
+    log "Following denied requests (Ctrl-C to stop)"
+    vm_admin_exec bash -c "tail -n0 -F /var/log/squid/access.log | grep --line-buffered TCP_DENIED"
+    return
+  fi
+  log "Domains denied by the proxy (count, destination):"
+  vm_admin_exec bash -c "awk '\$4 ~ /TCP_DENIED/ {print \$7}' /var/log/squid/access.log 2>/dev/null \
+    | sed -E 's#^[a-z]+://##; s#/.*##; s#:[0-9]+\$##' | sort | uniq -c | sort -rn | head -40"
+  echo
+  log "Packets dropped by the firewall (connections that bypassed the proxy):"
+  vm_admin_exec bash -c "nft list table ip agent_sandbox 2>/dev/null | grep -E 'counter packets [1-9]' || echo '   none'"
+  echo
+  echo "Allow a domain:  sandbox allow $NAME <domain>"
+}
+
+# --------------------------------------------------------------------------- dispatch
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  setup)      cmd_setup "$@" ;;
+  create)     cmd_create "$@" ;;
+  provision)  cmd_provision "$@" ;;
+  start)      cmd_start "$@" ;;
+  stop)       cmd_stop "$@" ;;
+  destroy|rm) cmd_destroy "$@" ;;
+  list|ls)    cmd_list ;;
+  status)     cmd_status "$@" ;;
+  shell|ssh)  cmd_shell "$@" ;;
+  exec)       cmd_exec "$@" ;;
+  put)        cmd_put "$@" ;;
+  agent)      cmd_agent "$@" ;;
+  auth)       cmd_auth "$@" ;;
+  clone)      cmd_clone "$@" ;;
+  verify)     cmd_verify "$@" ;;
+  fetch)      cmd_fetch "$@" ;;
+  ide)        cmd_ide "$@" ;;
+  allow)      cmd_allow "$@" ;;
+  network)    cmd_network "$@" ;;
+  blocked)    cmd_blocked "$@" ;;
+  help|-h|--help) usage ;;
+  *) usage; die "Unknown command '$cmd'" ;;
+esac

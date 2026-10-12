@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# agent-session — start (or re-attach to) the coding agent in a persistent tmux session,
+# in the sandbox's repository (~/work/$REPO_DIR; cloned on first use).
+# If ~/.agent-sandbox/next-prompt exists it is passed to the agent as the initial prompt.
+set -euo pipefail
+# shellcheck source=/dev/null
+. /opt/agent-sandbox/agent-env.sh
+
+if [ ! -f /run/agent-sandbox/network.ok ]; then
+  echo "Egress policy is not active (/run/agent-sandbox/network.ok missing) — refusing to start the agent." >&2
+  echo "On the host run: sandbox network ${SANDBOX_NAME:-<name>} reload" >&2
+  exit 1
+fi
+
+if ! infocmp "${TERM:-dumb}" >/dev/null 2>&1; then
+  export TERM=xterm-256color
+fi
+
+[ -n "${REPO_DIR:-}" ] || { echo "REPO_DIR is not set (/etc/agent-sandbox/agent.env) — re-run: sandbox provision <name>" >&2; exit 1; }
+workdir="$HOME/work/$REPO_DIR"
+if [ ! -d "$workdir" ]; then
+  echo "Repository not cloned yet — cloning $REPO_URL"
+  /opt/agent-sandbox/bin/agent-auth clone || {
+    echo "Clone failed. Is the deploy key registered? On the host run: sandbox auth ${SANDBOX_NAME:-<name>} git" >&2
+    exit 1
+  }
+fi
+
+session="agent-$(printf '%s' "$(basename "$workdir")" | tr -c 'A-Za-z0-9_-' '_')"
+pending="$HOME/.agent-sandbox/next-prompt"
+
+if tmux has-session -t "=$session" 2>/dev/null; then
+  if [ -s "$pending" ]; then
+    echo "Session '$session' is already running; the new prompt was NOT sent." >&2
+    echo "It is kept in $pending — paste it into the agent, or exit the agent and run: agent-run ." >&2
+    sleep 3
+  fi
+  exec tmux attach-session -t "=$session"
+fi
+
+prompt_file=""
+if [ -s "$pending" ]; then
+  mkdir -p "$HOME/.agent-sandbox/prompts"
+  prompt_file="$HOME/.agent-sandbox/prompts/$session-$(date +%Y%m%d-%H%M%S).txt"
+  mv "$pending" "$prompt_file"
+fi
+
+exec tmux new-session -s "$session" -c "$workdir" /opt/agent-sandbox/bin/agent-run "$workdir" ${prompt_file:+"$prompt_file"}

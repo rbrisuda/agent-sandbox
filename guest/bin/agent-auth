@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# agent-auth [all|git|gh|copilot|status|clone] — credentials live ONLY inside the VM.
+# The repository (REPO_URL, SSH) is fixed per sandbox and comes from /etc/agent-sandbox/agent.env.
+set -euo pipefail
+# shellcheck source=/dev/null
+. /opt/agent-sandbox/agent-env.sh
+
+B=$'\033[1m'; G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[0m'
+hdr() { printf '\n%s== %s ==%s\n' "$B" "$*" "$R"; }
+
+ask_yes() {
+  local a
+  read -r -p "$1 [Y/n] " a || true
+  case "$a" in n|N|no|NO) return 1 ;; *) return 0 ;; esac
+}
+
+repo_path() {
+  # git@host:org/repo.git | ssh://git@host[:22]/org/repo.git -> org/repo
+  local p
+  case "$REPO_URL" in
+    ssh://*) p="${REPO_URL#ssh://}"; p="${p#*/}" ;;
+    *) p="${REPO_URL#*:}" ;;
+  esac
+  printf '%s' "${p%.git}"
+}
+
+repo_reachable() {
+  GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=15" git ls-remote --heads "$REPO_URL" >/dev/null 2>&1
+}
+
+auth_git() {
+  hdr "Git access to $REPO_URL"
+  if repo_reachable; then
+    printf '%s✔ The deploy key already works for %s%s\n' "$G" "$(repo_path)" "$R"
+    do_clone
+    return 0
+  fi
+  echo "A dedicated SSH key was generated inside this VM (the private key never leaves it)."
+  echo "Add this PUBLIC key as a ${B}deploy key with write access${R} to $(repo_path):"
+  echo
+  printf '%s%s%s\n' "$Y" "$(cat ~/.ssh/id_ed25519_git.pub)" "$R"
+  echo
+  echo "  https://$GIT_HOST/$(repo_path)/settings/keys/new   (tick 'Allow write access')"
+  echo
+  echo "Do not add it to your personal account — that would give the VM access to all your repositories."
+  while :; do
+    read -r -p "Press Enter after adding the key to test it (or type 'skip')... " a || a=skip
+    [ "$a" = skip ] && { echo "Skipped. Later: sandbox auth <name> git"; return 0; }
+    if repo_reachable; then
+      printf '%s✔ git access to %s works%s\n' "$G" "$(repo_path)" "$R"
+      do_clone
+      return 0
+    fi
+    echo "Not working yet (git ls-remote failed). Details:"
+    GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=15" git ls-remote --heads "$REPO_URL" 2>&1 | tail -3 || true
+  done
+}
+
+auth_gh() {
+  hdr "GitHub CLI (gh) for $GH_HOST — used by the agent to open pull requests"
+  if gh auth status --hostname "$GH_HOST" >/dev/null 2>&1; then
+    gh auth status --hostname "$GH_HOST" || true
+    ask_yes "Already logged in. Log in again?" || return 0
+  fi
+  echo "Recommended: a fine-grained personal access token limited to the target repository with"
+  echo "  Contents: Read and write, Pull requests: Read and write, Metadata: Read"
+  echo "Choose 'Paste an authentication token' below (browser login cannot open a browser in the VM;"
+  echo "if you pick it, open the shown URL on your host and enter the one-time code)."
+  echo
+  gh auth login --hostname "$GH_HOST" --git-protocol ssh --skip-ssh-key
+}
+
+auth_copilot() {
+  hdr "GitHub Copilot CLI ($COPILOT_HOST)"
+  echo "Follow the device-login instructions: open the URL on your HOST browser and enter the code."
+  echo "Alternative: export COPILOT_GITHUB_TOKEN=<fine-grained PAT with the 'Copilot Requests' permission>."
+  echo
+  if [ "$COPILOT_HOST" = github.com ]; then
+    copilot login
+  else
+    copilot login --host "https://$COPILOT_HOST"
+  fi
+}
+
+auth_status() {
+  hdr "Status"
+  if repo_reachable; then
+    echo "git ($(repo_path)):  OK"
+  else
+    echo "git ($(repo_path)):  no access          -> sandbox auth <name> git"
+  fi
+  if [ -d ~/work/"$REPO_DIR"/.git ]; then
+    echo "clone:                 ~/work/$REPO_DIR"
+  else
+    echo "clone:                 missing            -> sandbox clone <name>"
+  fi
+  if gh auth status --hostname "$GH_HOST" >/dev/null 2>&1; then
+    echo "gh ($GH_HOST):         OK"
+  else
+    echo "gh ($GH_HOST):         not logged in      -> sandbox auth <name> gh"
+  fi
+  if [ -n "$(ls -A ~/.copilot 2>/dev/null | grep -v -e copilot-instructions.md || true)" ] || [ -n "${COPILOT_GITHUB_TOKEN:-}" ]; then
+    echo "copilot:               configured (run 'copilot' to confirm)"
+  else
+    echo "copilot:               not logged in      -> sandbox auth <name> copilot"
+  fi
+}
+
+do_clone() {
+  mkdir -p ~/work
+  if [ -d ~/work/"$REPO_DIR"/.git ]; then
+    echo "~/work/$REPO_DIR already exists — fetching"
+    git -C ~/work/"$REPO_DIR" fetch --all --prune
+  else
+    git clone "$REPO_URL" ~/work/"$REPO_DIR"
+  fi
+  printf '%s✔ Repository in /home/agent/work/%s%s\n' "$G" "$REPO_DIR" "$R"
+}
+
+case "${1:-all}" in
+  all)
+    auth_git
+    ask_yes "Set up gh (needed for the agent to open pull requests)?" && auth_gh
+    ask_yes "Log in to the Copilot CLI now?" && auth_copilot
+    auth_status
+    ;;
+  git) auth_git ;;
+  gh) auth_gh ;;
+  copilot) auth_copilot ;;
+  status) auth_status ;;
+  clone) do_clone ;;
+  *) echo "Usage: agent-auth [all|git|gh|copilot|status|clone]" >&2; exit 2 ;;
+esac

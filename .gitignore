@@ -1,0 +1,20 @@
+# Personal configuration (never commit)
+config/sandbox.conf
+config/allowlist.local.txt
+config/certs/*.crt
+config/certs/*.pem
+config/home/*
+config/home/.*
+!config/home/README.md
+
+# OS / editor
+.DS_Store
+.idea/
+*.iml
+.vscode/
+
+# Example build output (when built on the host by mistake)
+examples/**/build/
+examples/**/.gradle/
+examples/**/.kotlin/
+examples/**/target/

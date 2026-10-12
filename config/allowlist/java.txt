@@ -1,0 +1,23 @@
+# java - Gradle, Maven, Kotlin and common JVM repositories.
+
+# Gradle: distributions (wrapper), Plugin Portal and its artifact CDN
+.gradle.org
+# Maven Central
+repo.maven.apache.org
+repo1.maven.org
+# Apache archive (Maven distributions, maven-wrapper)
+archive.apache.org
+dlcdn.apache.org
+# Google Maven (androidx, some Kotlin/Google libs)
+maven.google.com
+dl.google.com
+# Kotlin / JetBrains artifacts (Kotlin/Native, IntelliJ deps, JetBrains Space packages)
+cache-redirector.jetbrains.com
+download.jetbrains.com
+packages.jetbrains.team
+# JDK toolchain auto-provisioning (foojay resolver -> Adoptium)
+api.foojay.io
+api.adoptium.net
+# Spring
+repo.spring.io
+start.spring.io

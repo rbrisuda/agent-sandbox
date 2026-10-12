@@ -1,0 +1,13 @@
+# core - needed for Git, GitHub, gh and the GitHub Copilot CLI.
+# Format: one domain per line. ".example.com" (or "*.example.com") = domain + all subdomains.
+# GIT_HOST, GH_HOST and COPILOT_HOST are added automatically.
+
+# GitHub (web, API, git over HTTPS, release/raw downloads)
+.github.com
+.githubusercontent.com
+.githubassets.com
+# GitHub Copilot (API, telemetry, per-plan endpoints like api.individual.githubcopilot.com)
+.githubcopilot.com
+# GitHub container registry / Actions artifacts (used by some tooling)
+ghcr.io
+pkg-containers.githubusercontent.com

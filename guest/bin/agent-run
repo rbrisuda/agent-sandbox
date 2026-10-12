@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# agent-run [DIR] [PROMPT_FILE] - runs the configured agent (AGENT_CMD) in DIR, then drops to a shell.
+# Started by agent-session inside tmux; can also be run manually inside the VM.
+# shellcheck source=/dev/null
+. /opt/agent-sandbox/agent-env.sh
+
+cd "${1:-.}" || exit 1
+prompt_file="${2:-${PROMPT_FILE:-}}"
+
+# AGENT_CMD is split on whitespace (no quoting), e.g. "copilot --yolo".
+read -r -a cmd <<< "${AGENT_CMD:-copilot --yolo}"
+# Prompt flag: Copilot CLI uses "-i PROMPT" (interactive with an initial prompt).
+# Set AGENT_PROMPT_ARG="" for agents that take the prompt as a positional argument.
+prompt_arg="${AGENT_PROMPT_ARG--i}"
+
+printf '\033[1;35m[sandbox:%s]\033[0m %s in %s\n' "${SANDBOX_NAME:-}" "${cmd[*]}" "$PWD"
+echo "Detach: Ctrl-b d (agent keeps running; re-attach with 'sandbox agent ...')"
+echo
+
+if [ -n "$prompt_file" ] && [ -s "$prompt_file" ]; then
+  prompt="$(cat "$prompt_file")"
+  if [ -n "$prompt_arg" ]; then
+    "${cmd[@]}" "$prompt_arg" "$prompt"
+  else
+    "${cmd[@]}" "$prompt"
+  fi
+else
+  "${cmd[@]}"
+fi
+status=$?
+
+echo
+echo "Agent exited (status $status). You are in a shell inside the sandbox ($PWD)."
+echo "Restart the agent: agent-run .    Leave: exit (or Ctrl-b d to detach)"
+exec bash -l

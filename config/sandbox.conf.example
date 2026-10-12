@@ -1,0 +1,44 @@
+# Copy to config/sandbox.conf and adjust. Sourced by bash; only override what you need.
+# Settings are frozen into a sandbox when it is created; re-create (or edit
+# ~/.agent-sandbox/sandboxes/<name>/sandbox.env + `sandbox provision <name>`) to change them.
+
+# --- Resources -------------------------------------------------------------------------
+#CPUS=6
+#MEMORY_GIB=12
+#DISK_GIB=80
+
+# --- GitHub Enterprise Server for code + PRs, Copilot via github.com ------------------
+# gh talks to your GHES; Copilot CLI keeps using github.com (COPILOT_GH_HOST is set for it).
+# (the git host itself comes from the SSH URL: sandbox create acme git@github.com:org/acme.git)
+#GH_HOST=github.com
+#COPILOT_HOST=github.com
+#
+# If the GHES / Nexus resolves to a private IP (VPN, intranet), allow those ranges explicitly.
+# Without this, private networks are unreachable from the VM by design.
+#ALLOW_CIDRS="10.20.0.0/16"
+#EXTRA_ALLOW_DOMAINS="nexus.example.internal"
+
+# --- Corporate proxy / TLS inspection -------------------------------------------------
+#UPSTREAM_PROXY="http://proxy.example.com:8080"   # its IP must be in ALLOW_CIDRS if private
+# Put the corporate root CA (PEM, *.crt) into config/certs/ — it is installed in the VM.
+
+# --- Java ------------------------------------------------------------------------------
+#JDK_VERSIONS="21 25 17"      # first = default JAVA_HOME; all are registered for Gradle toolchains
+#GRADLE_VERSION=9.8.1
+#MAVEN_VERSION=3.9.16
+#ALLOWLISTS="core java node jetbrains"
+
+# --- Agent -----------------------------------------------------------------------------
+#AGENT_CMD="copilot --yolo"
+#AGENT_CMD="copilot --allow-all-tools --allow-all-paths"   # without --allow-all-urls
+#COPILOT_VERSION="<x.y.z>"        # pin an @github/copilot version for reproducibility
+#
+# Other agents work too, as long as they run in a terminal, e.g.:
+#AGENT_CMD="claude --dangerously-skip-permissions"
+#AGENT_PROMPT_ARG=""
+#EXTRA_ALLOW_DOMAINS="api.anthropic.com"
+#   (install them via config/home or `sandbox shell <name> --admin`)
+
+# --- Git identity for the agent's commits (default: your host git identity) ------------
+#GIT_USER_NAME="Jane Doe (agent)"
+#GIT_USER_EMAIL="jane.doe@example.com"

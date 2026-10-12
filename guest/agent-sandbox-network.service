@@ -1,0 +1,14 @@
+[Unit]
+Description=agent-sandbox egress policy (nftables + squid allowlist)
+DefaultDependencies=no
+After=local-fs.target nftables.service
+Before=network-pre.target squid.service ssh.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/agent-sandbox/bin/apply-network --boot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

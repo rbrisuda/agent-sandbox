@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""proxy-connect HOST PORT — SSH ProxyCommand that tunnels through the sandbox egress proxy.
+
+Sends "CONNECT host:port" to the local squid (127.0.0.1:3128) and then relays stdin/stdout.
+The host name is resolved by the proxy, so the agent itself needs no DNS access.
+"""
+import os
+import select
+import socket
+import sys
+
+PROXY = ("127.0.0.1", 3128)
+
+
+def main() -> int:
+    if len(sys.argv) != 3:
+        print("usage: proxy-connect HOST PORT", file=sys.stderr)
+        return 2
+    host, port = sys.argv[1], sys.argv[2]
+    sock = socket.create_connection(PROXY, timeout=15)
+    sock.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode())
+
+    header = b""
+    while b"\r\n\r\n" not in header:
+        chunk = sock.recv(4096)
+        if not chunk:
+            print("proxy-connect: proxy closed the connection", file=sys.stderr)
+            return 1
+        header += chunk
+        if len(header) > 65536:
+            print("proxy-connect: oversized proxy response", file=sys.stderr)
+            return 1
+    head, _, rest = header.partition(b"\r\n\r\n")
+    status = head.split(b"\r\n", 1)[0].decode(errors="replace")
+    parts = status.split()
+    if len(parts) < 2 or parts[1] != "200":
+        print(f"proxy-connect: proxy refused {host}:{port}: {status}", file=sys.stderr)
+        print("proxy-connect: (only the configured git host is allowed on port 22)", file=sys.stderr)
+        return 1
+
+    sock.settimeout(None)
+    out = sys.stdout.buffer
+    if rest:
+        out.write(rest)
+        out.flush()
+    stdin_fd = sys.stdin.fileno()
+    stdin_open = True
+    while True:
+        rlist = [sock] + ([stdin_fd] if stdin_open else [])
+        readable, _, _ = select.select(rlist, [], [])
+        if sock in readable:
+            data = sock.recv(65536)
+            if not data:
+                return 0
+            out.write(data)
+            out.flush()
+        if stdin_open and stdin_fd in readable:
+            data = os.read(stdin_fd, 65536)
+            if not data:
+                stdin_open = False
+                try:
+                    sock.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+            else:
+                sock.sendall(data)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (BrokenPipeError, KeyboardInterrupt):
+        sys.exit(0)
+    except OSError as exc:
+        print(f"proxy-connect: {exc}", file=sys.stderr)
+        sys.exit(1)

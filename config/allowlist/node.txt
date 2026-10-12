@@ -1,0 +1,5 @@
+# node — npm / yarn / pnpm registries and Node.js downloads.
+registry.npmjs.org
+registry.yarnpkg.com
+repo.yarnpkg.com
+nodejs.org
