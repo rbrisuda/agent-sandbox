@@ -73,7 +73,7 @@ They are never on your host, and they disappear with `sandbox destroy`. Revoke t
 ## Rotating
 
 ```bash
-sandbox destroy acme          # removes VM, keys and tokens in it
+sandbox destroy my-project          # removes VM, keys and tokens in it
 # revoke: deploy key, fine-grained PAT, Copilot device authorization
-sandbox create acme git@github.com:my-org/acme-service.git && sandbox auth acme
+sandbox create my-project git@github.com:my-org/my-project-service.git && sandbox auth my-project
 ```

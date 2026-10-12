@@ -38,7 +38,7 @@ cd ~/agent-sandbox
 # optional: put the CLI on your PATH
 mkdir -p ~/.local/bin && ln -s "$PWD/sandbox" ~/.local/bin/sandbox
 
-# optional: your settings (GHES host, JDK versions, resources, ...)
+# optionally change config: your settings (GIT host, JDK versions, resources, ...)
 cp config/sandbox.conf.example config/sandbox.conf && $EDITOR config/sandbox.conf
 
 ./sandbox setup          # macOS: installs Lima via Homebrew; Linux: checks Lima, /dev/kvm, QEMU
@@ -52,19 +52,17 @@ Homebrew on macOS).
 One sandbox works on **one repository**, given as its **SSH clone URL**:
 
 ```bash
-sandbox create acme git@github.com:my-org/acme-service.git
+sandbox create my-project git@github.com:my-org/my-project-service.git
                                # ~5–10 min the first time (Ubuntu image, JDK, Gradle, Maven, Node, Copilot CLI)
-sandbox verify acme            # PASS/FAIL report: isolation + toolchain
-sandbox auth acme              # 1) shows a VM-generated SSH key + the repo's deploy-key URL;
+sandbox verify my-project            # PASS/FAIL report: isolation + toolchain
+sandbox auth my-project              # 1) shows a VM-generated SSH key + the repo's deploy-key URL;
                                #    add it with write access, press Enter -> tested and cloned
-                               #    into /home/agent/work/acme-service
+                               #    into /home/agent/work/my-project-service
                                # 2) gh login (fine-grained PAT) so the agent can open PRs
                                # 3) Copilot CLI login: open the URL in your host browser, enter the code
-sandbox agent acme --prompt "ABC-123: implement ... Open a draft PR when done."
+sandbox agent my-project --prompt "ABC-123: implement ... Open a draft PR when done."
 ```
 
-No real repository at hand? Push one of the sample projects in [`examples/`](../examples) to an
-empty test repository and use its SSH URL (see [docs/08](08-java-kotlin.md#try-it-with-a-sample-project)).
 
 See [docs/04-daily-workflow.md](04-daily-workflow.md) for the day-to-day loop.
 

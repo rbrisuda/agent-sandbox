@@ -123,7 +123,7 @@ cmd_create() {
         REPO_URL="$1"; shift ;;
     esac
   done
-  [ -n "$REPO_URL" ] || die "Usage: sandbox create NAME SSH_URL [options]   e.g. sandbox create acme git@github.com:my-org/acme.git"
+  [ -n "$REPO_URL" ] || die "Usage: sandbox create NAME SSH_URL [options]   e.g. sandbox create my-project git@github.com:my-org/my-project.git"
   validate_ssh_repo_url "$REPO_URL"
   [ -n "$lists_override" ] && ALLOWLISTS="$lists_override"
   [ -n "$allow_extra" ] && EXTRA_ALLOW_DOMAINS="${EXTRA_ALLOW_DOMAINS:-} $allow_extra"

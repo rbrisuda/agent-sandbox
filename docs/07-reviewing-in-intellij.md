@@ -23,8 +23,8 @@ Required CI checks run the build in your CI environment, not on your laptop.
 ## B. Fetch into a local review repository + Safe Mode
 
 ```bash
-sandbox fetch acme                         # the sandbox's repository (from the SSH URL)
-# -> ~/agent-review/acme/acme-service  with remote-tracking branches sandbox/<branch>
+sandbox fetch my-project                         # the sandbox's repository (from the SSH URL)
+# -> ~/agent-review/my-project/my-project-service  with remote-tracking branches sandbox/<branch>
 ```
 
 How it works:
@@ -36,43 +36,43 @@ How it works:
 
 In IntelliJ:
 
-1. **File → Open…** → `~/agent-review/acme/acme-service`
+1. **File → Open…** → `~/agent-review/my-project/my-project-service`
 2. When asked *"Trust and open project?"*, choose **Preview in Safe Mode**. In Safe Mode,
    IntelliJ does not import Gradle/Maven, does not run build scripts and does not execute run
    configurations.
 3. **Git → Branches → `sandbox/ABC-123-…` → Compare with Current** (or **Show Diff with
    Working Tree**), or open the **Git log** tool window and select the branch.
 4. Add your comments on GitHub, or continue the conversation with the agent
-   (`sandbox agent acme`).
+   (`sandbox agent my-project`).
 
 Also disable *Settings → Build Tools → "Reload changes in build scripts: Any changes"* for
 projects you haven't trusted, and keep **Settings → Advanced Settings → "Trust projects in
 …"** empty for `~/agent-review`.
 
-If you want to *run* the agent's code, do it in the VM (`sandbox shell acme` → `./gradlew test`),
+If you want to *run* the agent's code, do it in the VM (`sandbox shell my-project` → `./gradlew test`),
 not on the host.
 
 ## C. JetBrains Gateway / Remote Development (full IDE, code stays in the VM)
 
 ```bash
-sandbox ide acme
+sandbox ide my-project
 ```
 
 This command:
 
-- writes `~/.agent-sandbox/ssh_config` with a `Host sandbox-acme` entry. The entry uses the
+- writes `~/.agent-sandbox/ssh_config` with a `Host sandbox-my-project` entry. The entry uses the
   sandbox key, sets no agent forwarding and pins the host key.
 - prints the line to add as the **first line** of `~/.ssh/config`:
   `Include ~/.agent-sandbox/ssh_config`.
 
 Then:
 
-1. Allow the IDE backend download: `sandbox allow acme .jetbrains.com download-cdn.jetbrains.com plugins.jetbrains.com`
+1. Allow the IDE backend download: `sandbox allow my-project .jetbrains.com download-cdn.jetbrains.com plugins.jetbrains.com`
    (or add `jetbrains` to `ALLOWLISTS` before creating the sandbox).
 2. Open **JetBrains Gateway**, or in IntelliJ **File → Remote Development → SSH**:
-   - New connection → host `sandbox-acme`, user `agent`, authentication "OpenSSH config and
+   - New connection → host `sandbox-my-project`, user `agent`, authentication "OpenSSH config and
      authentication agent".
-   - IDE: IntelliJ IDEA. Project: `/home/agent/work/acme-service`.
+   - IDE: IntelliJ IDEA. Project: `/home/agent/work/my-project-service`.
 3. The IDE backend runs **inside the VM** as `agent`. Gradle sync, indexing, tests and the
    debugger all run there. Only the UI runs on your Mac.
 
@@ -91,4 +91,4 @@ Trade-offs:
 The same options apply:
 
 - Option B: use **Restricted Mode** when VS Code asks whether you trust the folder.
-- Option C: use **Remote-SSH** with host `sandbox-acme`.
+- Option C: use **Remote-SSH** with host `sandbox-my-project`.

@@ -1,7 +1,7 @@
 # agent-sandbox
 
-**Run autonomous coding agents (GitHub Copilot CLI and others) on your laptop without giving them
-your laptop.**
+**Run AI coding agents (showcase with GitHub Copilot CLI) on your laptop without giving them
+your laptop in easy way.**
 
 Each agent session runs in a **disposable virtual machine**:
 
@@ -15,44 +15,29 @@ Each VM has:
 - no host secrets,
 - an **egress allowlist**.
 
-The agent can clone, build, test, commit, push and open a PR on its own, without approval prompts,
-because the worst it can damage is the VM.
+The agent can clone, build, test, commit, push and open a PR on its own, without approval prompts.
 
-> **Status: untested draft.** Written as a reference implementation and tutorial. Expect rough
-> edges, and please report what breaks.
-
-```mermaid
-flowchart LR
-  subgraph Host["Your machine"]
-    you(["you"]) --> cli["sandbox CLI"]
-    ij["IntelliJ<br/>(Safe Mode / Gateway)"]
-  end
-  subgraph VM["Sandbox VM — Ubuntu 24.04"]
-    agent["agent user (no sudo)<br/>copilot --yolo · gradle · mvn · git · gh"]
-    proxy["squid allowlist proxy"]
-    fw["nftables: agent → proxy only"]
-  end
-  cli -- "SSH (key-only, no forwarding)" --> agent
-  agent --> proxy -- "github.com, Maven Central,<br/>Gradle, Copilot API …" --> net[(Internet)]
-  agent -. "anything else / host / LAN: dropped" .-> fw
-  cli -- "sandbox fetch (git bundle)" --> ij
-  agent -- "push branch + PR (deploy key)" --> gh[(GitHub)]
-```
+![img.png](docs/img.png)
 
 ## Why
 
-An agent with "allow all" permissions runs scripts it wrote itself, build logic from
-dependencies, and commands suggested by whatever it reads (prompt injection). On your host, it
-runs **as you**. It can read `~/.ssh`, `~/.aws`, other repositories and browser data, and it can
-reach your VPN. Reviewing every generated script is not realistic. Isolation is.
+- An agent with "allow all" permissions runs scripts it wrote itself, build logic from
+dependencies, and commands suggested by whatever it reads - including prompt injection. 
+- On your host, it runs with your privileges, potentially accessing your SSH keys, AWS credentials, other repositories, 
+browser data, and VPN-connected resources.  
+- Reviewing every generated script is not realistic. 
+- Isolation is the solution, not manual review.
 
-| | Agent on host | `copilot --sandbox` | Docker | **agent-sandbox** |
+### Why Disposable Virtual Machine
+
+| | Agent on host | `copilot --sandbox` | Docker container | **Disposable VM** |
 |---|---|---|---|---|
-| Separate kernel / hardware boundary | ✗ | ✗ | ✗ | ✔ |
-| Host files invisible | ✗ | policy | unless mounted | ✔ (no mounts at all) |
-| Host credentials unreachable | ✗ | policy | ✔ | ✔ |
-| Egress allowlist | ✗ | URL prompts | ✗ | ✔ (firewall + proxy) |
-| Works on macOS + Linux | ✔ | ✔ | ✔ | ✔ |
+| Separate guest kernel | ✗ | ✗ | ✗ | ✔ |
+| Hardware-virtualization boundary | ✗ | ✗ | ✗ | ✔ |
+| Host files inaccessible by default | ✗ | policy-dependent | unless mounted | ✔ |
+| Host credentials isolated | ✗ | policy-dependent | if not exposed | ✔ |
+| Network egress allowlist | ✗ | URL approval | requires configuration | ✔ firewall + proxy |
+| macOS + Linux support | ✔ | ✔ | ✔ | ✔ |
 
 Details: [Threat model](docs/01-threat-model.md) · [Isolation options and why Lima](docs/02-isolation-options.md)
 
@@ -62,21 +47,21 @@ Details: [Threat model](docs/01-threat-model.md) · [Isolation options and why L
 
 ```bash
 git clone <this-repo> ~/agent-sandbox && cd ~/agent-sandbox
-cp config/sandbox.conf.example config/sandbox.conf    # optional: GHES host, JDKs, resources …
+cp config/sandbox.conf.example config/sandbox.conf    # optionally change config: set GIT host, JDKs, resources …
 
 ./sandbox setup           # macOS: installs Lima via Homebrew
                           # Linux: needs Lima + QEMU + /dev/kvm access first (docs/03)
 ```
 
-### 2. A sandbox per repository — just pass its SSH URL
+### 2. A sandbox — just pass repository SSH URL
 
 ```bash
-./sandbox create acme git@github.com:my-org/acme.git   # VM + JDK + Gradle + Maven + Node + Copilot CLI (~5–10 min)
-./sandbox verify acme     # proves isolation + toolchain
-./sandbox auth acme       # deploy key (generated in the VM) -> clone, gh fine-grained PAT, Copilot login
-./sandbox agent acme --prompt "ABC-123: … Open a draft PR when the build is green."
-# Ctrl-b d to detach; `./sandbox agent acme` to re-attach
-./sandbox fetch acme      # review branches locally (no code executed) — or review the PR on GitHub
+./sandbox create my-project git@github.com:my-org/my-project.git   # VM + JDK + Gradle + Maven + Node + Copilot CLI
+./sandbox verify my-project     # proves isolation + toolchain
+./sandbox auth my-project       # deploy key (generated in the VM) -> clone, gh fine-grained PAT, Copilot login
+./sandbox agent my-project --prompt "ABC-123: … Open a draft PR when the build is green."
+# Ctrl-b d to detach; `./sandbox agent my-project` to re-attach
+./sandbox fetch my-project      # review branches locally (no code executed) — or review the PR on GitHub
 ```
 
 The URL fixes everything repository-specific: the only git host reachable over SSH, the
@@ -131,13 +116,11 @@ Full guides: [Setup (macOS + Linux)](docs/03-setup.md) ·
 
 See [docs/01](docs/01-threat-model.md#what-is-not-covered-residual-risks).
 
-## Java / Kotlin
+## Development tooling
 
 Temurin JDKs (`JDK_VERSIONS`), Gradle and Maven are preinstalled and pre-configured for the
 proxy. Gradle toolchains see all installed JDKs. Corporate Nexus, CA certificates and the
-upstream proxy are covered in [docs/08](docs/08-java-kotlin.md). Optional sample projects to
-push into a test repository: [`examples/kotlin-gradle`](examples/kotlin-gradle),
-[`examples/java-maven`](examples/java-maven) (not used by the scripts).
+upstream proxy are covered in [docs/08](docs/08-development-tooling.md).
 
 ## Repository layout
 
@@ -163,9 +146,23 @@ docs/                       the tutorial
 5. [Network policy](docs/05-network-policy.md)
 6. [Credentials](docs/06-credentials.md)
 7. [Reviewing in IntelliJ](docs/07-reviewing-in-intellij.md)
-8. [Java / Kotlin with Gradle & Maven](docs/08-java-kotlin.md)
+8. [Development Tooling](docs/08-development-tooling.md)
 9. [Troubleshooting](docs/09-troubleshooting.md)
+
+## Final words
+
+- Solution is currently tested only on **macOS**.
+- Tooling is oriented on "java" stack (so I can easily try it on real things in my "world"), in case of need for different tools they need to be included in guest scripts and optionally provided some configuration.
+- Solution is using Github Copilot CLI, for different AI Agent needs to be included way of authentification in guest scripts.
+  - However, with Github Copilot CLI it can be tested and experimented for free, only GH user is needed. :)
+- **Main goal was not provide solution supporting everything (although I do not rule out further improvements towards this goal) but show real working solution, show way how tackle this problem 
+  with covering as much as possible for real work scenario and providing maximum information as possible to build on that.**
+  - Everything can be customized in similar way.
+  - Rewriting to support different tooling and AI agent is possible.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+
+

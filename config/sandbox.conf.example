@@ -9,7 +9,7 @@
 
 # --- GitHub Enterprise Server for code + PRs, Copilot via github.com ------------------
 # gh talks to your GHES; Copilot CLI keeps using github.com (COPILOT_GH_HOST is set for it).
-# (the git host itself comes from the SSH URL: sandbox create acme git@github.com:org/acme.git)
+# (the git host itself comes from the SSH URL: sandbox create my-project git@github.com:org/my-project.git)
 #GH_HOST=github.com
 #COPILOT_HOST=github.com
 #

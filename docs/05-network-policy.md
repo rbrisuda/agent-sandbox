@@ -8,8 +8,8 @@
 | `open` | Any **public** internet host (directly or through the proxy). Private, LAN, host and metadata ranges are still dropped. | Exploring, or when you cannot predict the needed domains. Switch back afterwards. |
 
 ```bash
-sandbox network acme open        # temporarily
-sandbox network acme allowlist   # back
+sandbox network my-project open        # temporarily
+sandbox network my-project allowlist   # back
 ```
 
 In both modes the following are always blocked for the agent:
@@ -74,10 +74,10 @@ The allowlist is built at `sandbox create` time from:
 Each sandbox keeps its own copy at `~/.agent-sandbox/sandboxes/<name>/allowlist.txt`.
 
 ```bash
-sandbox blocked acme                 # what was denied?  (count + domain)
-sandbox blocked acme -f              # live
-sandbox allow acme .jitpack.io       # leading dot = include subdomains (also accepts *.jitpack.io)
-$EDITOR ~/.agent-sandbox/sandboxes/acme/allowlist.txt && sandbox network acme reload
+sandbox blocked my-project                 # what was denied?  (count + domain)
+sandbox blocked my-project -f              # live
+sandbox allow my-project .jitpack.io       # leading dot = include subdomains (also accepts *.jitpack.io)
+$EDITOR ~/.agent-sandbox/sandboxes/my-project/allowlist.txt && sandbox network my-project reload
 ```
 
 The agent's instructions (`~/.copilot/copilot-instructions.md`) tell it to *report* blocked
@@ -97,7 +97,7 @@ domains instead of working around them. You decide what to allow.
 | Internal Nexus/Artifactory/GHES on a private IP | `ALLOW_CIDRS="10.20.30.0/24"` and its hostname in `EXTRA_ALLOW_DOMAINS` (or in `GIT_HOST`/`GH_HOST`) |
 | Explicit corporate proxy | `UPSTREAM_PROXY="http://user:pass@proxy.corp:8080"`. squid chains to it. If its IP is private, also add it to `ALLOW_CIDRS`. The credentials stay root-only in the VM. |
 | TLS inspection (custom root CA) | Put `corp-root.crt` (PEM) into `config/certs/`, then `sandbox provision <name>` |
-| Nexus mirror for Maven | `config/home/.m2/settings.xml` with `<mirrors>` **and** the `<proxies>` block (see [docs/08](08-java-kotlin.md)) |
+| Nexus mirror for Maven | `config/home/.m2/settings.xml` with `<mirrors>` **and** the `<proxies>` block (see [docs/08](08-development-tooling.md)) |
 
 ## Limitations
 

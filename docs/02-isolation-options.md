@@ -1,14 +1,16 @@
 # 2. Isolation options: why a VM, and why Lima
 
-| Option | Isolation boundary | macOS | Linux | Notes |
+| **Option** | **Isolation boundary** | **macOS** | **Linux** | **Notes** |
 |---|---|---|---|---|
-| Nothing (agent on host) | none | ✔ | ✔ | Agent = you. All files, keys, VPN. |
-| `copilot --sandbox` / Seatbelt / bubblewrap | process sandbox, same kernel | ✔ | ✔ | Good extra layer and quick to use, but it is policy-based. Every allowed path or bypass prompt is a hole, and it shares the host kernel. |
-| Dev container / Docker | namespaces, **shared kernel** | ✔ (Docker Desktop runs a VM anyway) | ✔ | Bind-mounting the repo exposes the host folder. On Linux, a kernel bug can lead to host compromise. |
-| gVisor (runsc) | user-space kernel | ✗ | ✔ | Strong, but Linux only and has compatibility gaps. |
-| **Full VM** (Apple Virtualization.framework, QEMU/KVM) | hardware virtualization | ✔ | ✔ | Separate kernel, its own disk, and nothing shared unless you configure it. |
-| **Firecracker microVM** | hardware virtualization (KVM) and a minimal VMM | ✗ (no KVM) | ✔ | Same model as AWS Lambda/Fargate. Tiny attack surface (about 5 emulated devices, Rust, seccomp), boots in under a second. |
-| Kata Containers | microVM per container | ✗ | ✔ | Firecracker/Cloud Hypervisor under a container runtime. More moving parts. |
+| Agent on host | None | ✔ | ✔ | Runs with your user privileges; can access anything your account can access. |
+| `copilot --sandbox` / Seatbelt / bubblewrap | OS-level process sandbox; shared host kernel | ✔ | ✔ | Useful defense in depth, but isolation depends on policy enforcement and configuration. |
+| Dev container / Docker | Container isolation; shared guest or host kernel | ✔ | ✔ | Bind mounts expose host files. On macOS, Docker Desktop adds a Linux VM beneath the container. |
+| gVisor (`runsc`) | User-space kernel + host-kernel sandboxing | ✗ | ✔ | Reduces direct exposure to host system calls; compatibility trade-offs. |
+| **Full VM** | **Hardware-assisted virtualization + separate guest kernel** | ✔ | ✔ | Separate guest OS and disk; host files and credentials remain inaccessible if not shared or forwarded. |
+| Firecracker microVM | Hardware-assisted virtualization + minimal VMM | ✗ | ✔ | Lightweight VM designed for strong workload isolation and fast startup. |
+| Kata Containers | VM-backed container isolation | ✗* | ✔ | Integrates lightweight VMs with container tooling; supports multiple hypervisors. |
+
+\* Availability depends on the specific runtime and host configuration.
 
 ## Why Lima on both macOS and Linux?
 

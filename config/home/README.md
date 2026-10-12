@@ -5,7 +5,7 @@ Everything in this directory (except this README) is copied into `/home/agent` i
 
 | File                              | Purpose                                                        |
 |-----------------------------------|----------------------------------------------------------------|
-| `.m2/settings.xml`                | Corporate Nexus mirror. **Must keep a `<proxies>` section** pointing to `127.0.0.1:3128` (see `docs/08-java-kotlin.md`). |
+| `.m2/settings.xml`                | Corporate Nexus mirror. **Must keep a `<proxies>` section** pointing to `127.0.0.1:3128` (see `../../docs/08-development-tooling.md`). |
 | `.gradle/init.d/mirror.gradle.kts`| Redirect Gradle repositories to a Nexus mirror.                 |
 | `.copilot/copilot-instructions.md`| Your own global agent instructions (replaces the default one).  |
 | `.gitconfig`                      | Extra git settings (user name/email are set by the sandbox).    |

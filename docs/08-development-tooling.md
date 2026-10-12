@@ -1,4 +1,4 @@
-# 8. Java / Kotlin with Gradle and Maven
+# 8. Actuall development tooling
 
 ## What is installed in the VM
 

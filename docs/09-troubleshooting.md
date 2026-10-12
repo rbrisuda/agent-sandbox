@@ -25,7 +25,7 @@ sandbox blocked <name>       # proxy denials + firewall drop counters
 |---|---|
 | `CONNECT tunnel failed, response 403` / `HTTP 403` from squid | Domain not in the allowlist: `sandbox blocked <name>`, then `sandbox allow <name> <domain>`. |
 | A tool hangs / times out, nothing in `blocked` | The tool ignores the proxy and its direct connection is dropped silently. Configure its proxy, or set `-Djava.net.useSystemProxies=true` for JVM tools. The firewall drop counter in `sandbox blocked` increases. |
-| Maven: `Could not transfer artifact … Connection timed out` | `~/.m2/settings.xml` lacks `<proxies>` (see [docs/08](08-java-kotlin.md)). |
+| Maven: `Could not transfer artifact … Connection timed out` | `~/.m2/settings.xml` lacks `<proxies>` (see [docs/08](08-development-tooling.md)). |
 | `git push` over SSH: `proxy refused <host>:22` | Only the host of the sandbox's SSH URL is allowed on port 22. Push to that repository only, or create another sandbox for the other repository. |
 | `sandbox create`: `Use the SSH clone URL` / `Not an SSH git URL` | Pass the SSH form: `git@github.com:org/repo.git` or `ssh://git@host/org/repo.git` (port 22). |
 | `sandbox auth`: `git ls-remote failed` | The deploy key is not on *this* repository yet, lacks write access, or the URL has a typo (`sandbox status <name>`). |
