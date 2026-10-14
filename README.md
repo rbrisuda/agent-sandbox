@@ -46,7 +46,7 @@ Details: [Threat model](docs/01-threat-model.md) · [Isolation options and why L
 ### 1. One-time host setup
 
 ```bash
-git clone <this-repo> ~/agent-sandbox && cd ~/agent-sandbox
+git clone git@github.com:rbrisuda/agent-sandbox.git ~/agent-sandbox && cd ~/agent-sandbox
 cp config/sandbox.conf.example config/sandbox.conf    # optionally change config: set GIT host, JDKs, resources …
 
 ./sandbox setup           # macOS: installs Lima via Homebrew
